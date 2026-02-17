@@ -14,7 +14,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- 2. DATABASE BRIDGE (Connects App to Firebase) ---
+// --- 2. DATABASE BRIDGE ---
 window.transact = async function(storeName, mode, operation) {
     const proxy = {
         getAll: async () => {
@@ -22,7 +22,6 @@ window.transact = async function(storeName, mode, operation) {
             return snap.docs.map(d => d.data());
         },
         put: async (data) => {
-            // Determine unique ID based on data type
             const key = data.id || data.dateId || data.name || "settings"; 
             await setDoc(doc(db, storeName, String(key)), data);
             return data;
@@ -143,11 +142,76 @@ function setupSelectors() {
     populate('editor-year', yOpts, editorYear);
     populate('otl-month', mOpts, editorMonth);
     populate('otl-year', yOpts, editorYear);
+    populate('bulk-month', mOpts, editorMonth);
+    populate('bulk-year', yOpts, editorYear);
     populate('bulk-import-month', mOpts, editorMonth);
     populate('bulk-import-year', yOpts, editorYear);
 }
 
-// --- 5. DASHBOARD LOGIC ---
+// --- 5. STAFF MANAGER & SIDEBAR ---
+
+window.renderDeptSidebar = () => {
+    const tree = document.getElementById('dept-tree'); if(!tree) return;
+    const currentDepts = Object.keys(departmentConfigs).sort();
+    
+    let html = `<div onclick="window.setFilter('All', 'All')" class="cursor-pointer px-3 py-2 text-sm font-bold flex justify-between items-center rounded mb-2 ${currentFilter.department === 'All' ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-100'}"><span>All Staff</span><span class="text-xs px-1.5 py-0.5 bg-black/5 rounded">${employees.length}</span></div>`; 
+    
+    CAMPUSES.forEach(campus => { 
+        html += `<div class="mt-4 mb-2 px-3 py-1 text-xs font-bold text-gray-400 uppercase tracking-wider">${campus}</div>`; 
+        let targetDepts = (campus === 'General Services') ? GS_DEPTS : ACADEMIC_DEPTS;
+        
+        currentDepts.filter(d => targetDepts.includes(d)).forEach(dept => { 
+            const count = employees.filter(e => e.campus === campus && e.department === dept).length; 
+            const isActive = currentFilter.campus === campus && currentFilter.department === dept;
+            html += `<div onclick="window.setFilter('${campus}', '${dept}')" class="cursor-pointer px-3 py-1 ml-2 text-sm flex justify-between items-center rounded ${isActive ? 'bg-white shadow-sm border-l-2 border-blue-500 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100 border-l-2 border-transparent'}"><span>${dept}</span><span class="text-[10px] bg-gray-100 px-1.5 rounded text-gray-500">${count}</span></div>`; 
+        }); 
+    }); 
+    tree.innerHTML = html;
+    
+    // Update Filter Label
+    const filterLabel = document.getElementById('filter-label');
+    const filterStatus = document.getElementById('filter-status');
+    if (filterStatus) {
+        if (currentFilter.department !== 'All') {
+            filterStatus.classList.remove('hidden');
+            filterLabel.innerText = `${currentFilter.department}`;
+            document.getElementById('delete-dept-button').innerText = `Delete ${currentFilter.department}`;
+        } else {
+            filterStatus.classList.add('hidden');
+            document.getElementById('delete-dept-button').innerText = "Delete All";
+        }
+    }
+};
+
+window.setFilter = (c, d) => { currentFilter = { campus: c, department: d }; renderDeptSidebar(); renderEmployeeList(); };
+window.clearFilter = () => window.setFilter('All', 'All');
+
+window.renderEmployeeList = () => {
+    const list = document.getElementById('employee-list');
+    let filtered = employees;
+    if (currentFilter.campus !== 'All') filtered = filtered.filter(e => e.campus === currentFilter.campus);
+    if (currentFilter.department !== 'All') filtered = filtered.filter(e => e.department === currentFilter.department);
+    
+    list.innerHTML = filtered.map(emp => `
+        <div onclick="window.selectEmployee('${emp.id}')" class="p-3 border-b hover:bg-gray-50 cursor-pointer flex justify-between items-center ${selectedEmployee?.id === emp.id ? 'bg-blue-50' : ''}">
+            <div class="flex items-center gap-2">
+                ${emp.profilePic ? `<img src="${emp.profilePic}" class="w-8 h-8 rounded-full object-cover">` : `<div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center"><i data-lucide="user" class="w-4 h-4 text-gray-400"></i></div>`}
+                <div><p class="font-bold text-sm text-gray-800">${emp.name}</p><p class="text-xs text-blue-600">${emp.department}</p></div>
+            </div>
+        </div>
+    `).join('');
+    if(window.lucide) lucide.createIcons();
+};
+
+window.selectEmployee = (id) => { 
+    selectedEmployee = employees.find(e => e.id === id); 
+    window.loadPeriodData(); 
+    document.getElementById('empty-state').classList.add('hidden'); 
+    document.getElementById('editor-area').classList.remove('hidden'); 
+    window.renderEmployeeList();
+};
+
+// --- 6. DASHBOARD & PAYSLIP CALCULATION ---
 
 window.updateDashboardStats = async () => {
     const yr = document.getElementById('filter-year').value;
@@ -167,7 +231,6 @@ window.updateDashboardStats = async () => {
                     totalUSD += res.usd;
                     count++;
                     
-                    // Breakdown
                     const d = emp.department || 'Unassigned';
                     const c = emp.campus || 'General';
                     if(!breakdown[c]) breakdown[c] = {};
@@ -183,7 +246,6 @@ window.updateDashboardStats = async () => {
     document.getElementById('stat-total-paid-usd').innerText = "$" + totalUSD.toLocaleString();
     document.getElementById('stat-employees').innerText = count;
 
-    // Render Breakdown
     let bdHtml = `<table class="w-full text-sm text-left"><thead class="bg-gray-50"><tr><th class="p-2">Campus</th><th class="p-2">Dept</th><th class="p-2 text-right">LAK</th><th class="p-2 text-right">USD</th></tr></thead><tbody>`;
     Object.keys(breakdown).forEach(c => {
         Object.keys(breakdown[c]).forEach(d => {
@@ -193,7 +255,6 @@ window.updateDashboardStats = async () => {
     bdHtml += `</tbody></table>`;
     document.getElementById('dept-breakdown').innerHTML = `<div class="bg-white rounded shadow overflow-hidden">${bdHtml}</div>`;
     
-    // History Logs
     const history = await window.transact(STORE_HISTORY, 'readonly', s => s.getAll());
     const hList = document.getElementById('history-list');
     if(hList) {
@@ -202,7 +263,6 @@ window.updateDashboardStats = async () => {
 };
 
 function calculatePayroll(emp, state) {
-    // Basic Summation Logic
     let lak = 0, usd = 0;
     if (emp.department === 'English') {
         const basic = (state.basicPay || 0) + (state.accumulated || 0) + (state.increase || 0) + (state.earningsOthersUSD || 0);
@@ -210,12 +270,11 @@ function calculatePayroll(emp, state) {
         const dedUSD = (state.profTax || 0) + (state.absences || 0);
         usd = Math.max(0, basic + ot - dedUSD);
         
-        // Convert LAK part (if any)
         const exRate = state.exchangeRate || 0;
         const cashOut = state.cashOut || 0;
         const netUSD = usd - cashOut;
         lak = (netUSD * exRate) + (state.itLAK || 0) - (state.insuranceLAK || 0);
-        usd = cashOut; // Reported USD is typically what they take in cash
+        usd = cashOut;
     } else {
         const cfg = departmentConfigs[emp.department] || { earnings: [], deductions: [] };
         let earn = 0, ded = 0;
@@ -231,7 +290,7 @@ function calculatePayroll(emp, state) {
     return { lak, usd };
 }
 
-// --- 6. STAFF MANAGER & EDITOR ---
+// --- 7. PAYSLIP EDITOR & PREVIEW ---
 
 window.loadPeriodData = () => {
     if (!selectedEmployee) return;
@@ -334,7 +393,7 @@ window.saveEmployeePayrollData = async () => {
     updateDashboardStats();
 };
 
-// --- 7. OT & LOANS LOGIC ---
+// --- 8. OT & LOANS LOGIC ---
 
 window.refreshOTLoansView = () => {
     const list = document.getElementById('otl-staff-list');
@@ -411,19 +470,21 @@ window.closeOTLEditor = () => {
     window.refreshOTLoansView();
 };
 
-// --- 8. IMPORT / EXPORT LOGIC ---
+// --- 9. BULK ACTIONS & IMPORT/EXPORT (CRITICAL FOR USER) ---
 
 window.importData = (input) => {
     const file = input.files[0];
     if (!file) return;
     const reader = new FileReader();
-    // Show loading
-    input.previousElementSibling.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Uploading...`;
+    // Show loading text
+    const btn = input.previousElementSibling;
+    const oldText = btn.innerHTML;
+    btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Uploading...`;
     
     reader.onload = async (e) => {
         try {
             const data = JSON.parse(e.target.result);
-            console.log("Restoring:", data);
+            console.log("Restoring Backup:", data);
 
             // 1. Configs
             const configs = data.config || data.departmentConfigs || [];
@@ -442,20 +503,82 @@ window.importData = (input) => {
                 for (const h of data.history) await window.transact(STORE_HISTORY, 'readwrite', s => s.put(h));
             }
             
-            alert("Data Successfully Restored from Backup!");
+            alert("SUCCESS! Data Restored from Backup file.");
             window.location.reload();
         } catch (err) {
             console.error(err);
-            alert("Error parsing file. Ensure it is a valid JSON backup.");
-            input.previousElementSibling.innerText = "Try Again";
+            alert("Error parsing file. Please use a valid JSON backup.");
+            btn.innerHTML = oldText;
         }
     };
     reader.readAsText(file);
     input.value = '';
 };
 
+window.exportData = async () => {
+    const emp = await window.transact(STORE_EMPLOYEES, 'readonly', s => s.getAll());
+    const hist = await window.transact(STORE_HISTORY, 'readonly', s => s.getAll());
+    const cfg = await window.transact(STORE_CONFIG, 'readonly', s => s.getAll());
+    
+    const exportObj = { 
+        employees: emp, 
+        history: hist, 
+        config: cfg, 
+        meta: { exportedAt: new Date().toISOString(), version: "Neerada_2026_Cloud" } 
+    }; 
+    
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportObj, null, 2)); 
+    const downloadAnchorNode = document.createElement('a'); 
+    downloadAnchorNode.setAttribute("href", dataStr); 
+    downloadAnchorNode.setAttribute("download", "Neerada_Backup_" + new Date().toISOString().slice(0,10) + ".json"); 
+    document.body.appendChild(downloadAnchorNode); 
+    downloadAnchorNode.click(); 
+    downloadAnchorNode.remove(); 
+};
+
+window.bulkCopyPrevious = async () => {
+    const m = document.getElementById('bulk-month').value;
+    const y = document.getElementById('bulk-year').value;
+    const currKey = `${y}-${m}`;
+    // Simple logic: Look for ANY previous entry and copy structure
+    if(!confirm(`Overwrite ${m} ${y} with previous month data?`)) return;
+    
+    let count = 0;
+    // Helper to find prev key
+    const prevMIdx = MONTHS.indexOf(m) - 1;
+    const prevKey = prevMIdx < 0 ? `${y-1}-December` : `${y}-${MONTHS[prevMIdx]}`;
+
+    for(const emp of employees) {
+        if(emp.payrollHistory && emp.payrollHistory[prevKey]) {
+            if(!emp.payrollHistory[currKey]) emp.payrollHistory[currKey] = JSON.parse(JSON.stringify(emp.payrollHistory[prevKey]));
+            await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.put(emp));
+            count++;
+        }
+    }
+    alert(`Copied data for ${count} staff.`);
+    initApp();
+};
+
+window.bulkSaveMonthData = async () => {
+    const m = document.getElementById('bulk-month').value;
+    const y = document.getElementById('bulk-year').value;
+    const currKey = `${y}-${m}`;
+    if(!confirm(`Generate default records for ${m} ${y}?`)) return;
+    
+    let count = 0;
+    for(const emp of employees) {
+        if(!emp.payrollHistory) emp.payrollHistory = {};
+        if(!emp.payrollHistory[currKey]) {
+            emp.payrollHistory[currKey] = createInitialState(emp.department);
+            await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.put(emp));
+            count++;
+        }
+    }
+    alert(`Generated records for ${count} staff.`);
+    initApp();
+};
+
 window.downloadBankReport = () => {
-    // Generate CSV for Bank Transfer
     const yr = document.getElementById('filter-year').value;
     const mn = document.getElementById('filter-month').value;
     if(yr === 'All' || mn === 'All') return alert("Select specific month/year");
@@ -476,7 +599,6 @@ window.downloadBankReport = () => {
 };
 
 window.downloadCSVReport = () => {
-    // Generate Full Report
     const rows = [["ID", "Name", "Dept", "Basic", "Total Earnings", "Total Deductions", "Net Pay"]];
     const yr = document.getElementById('filter-year').value;
     const mn = document.getElementById('filter-month').value;
@@ -498,52 +620,10 @@ window.downloadCSVReport = () => {
     document.body.appendChild(link); link.click(); link.remove();
 };
 
-// --- 9. HELPERS & MODALS ---
-window.renderDeptSidebar = () => {
-    const tree = document.getElementById('dept-tree'); if(!tree) return;
-    const currentDepts = Object.keys(departmentConfigs).sort();
-    let html = `<div onclick="window.setFilter('All', 'All')" class="cursor-pointer px-3 py-2 text-sm font-bold text-blue-800 bg-blue-100 rounded mb-2">All Staff (${employees.length})</div>`; 
-    CAMPUSES.forEach(campus => { 
-        html += `<div class="mt-4 mb-2 px-3 py-1 text-xs font-bold text-gray-500 uppercase">${campus}</div>`; 
-        let targetDepts = (campus === 'General Services') ? GS_DEPTS : ACADEMIC_DEPTS;
-        currentDepts.filter(d => targetDepts.includes(d)).forEach(dept => { 
-            const count = employees.filter(e => e.campus === campus && e.department === dept).length; 
-            html += `<div onclick="window.setFilter('${campus}', '${dept}')" class="cursor-pointer px-3 py-1 ml-2 text-sm text-gray-600 hover:text-blue-600 flex justify-between"><span>${dept}</span><span class="text-xs bg-gray-200 px-1 rounded">${count}</span></div>`; 
-        }); 
-    }); 
-    tree.innerHTML = html;
-};
+// --- 10. MODALS & HELPERS ---
 
-window.setFilter = (c, d) => { currentFilter = { campus: c, department: d }; renderDeptSidebar(); renderEmployeeList(); };
-
-window.renderEmployeeList = () => {
-    const list = document.getElementById('employee-list');
-    let filtered = employees;
-    if (currentFilter.campus !== 'All') filtered = filtered.filter(e => e.campus === currentFilter.campus);
-    if (currentFilter.department !== 'All') filtered = filtered.filter(e => e.department === currentFilter.department);
-    
-    list.innerHTML = filtered.map(emp => `
-        <div onclick="window.selectEmployee('${emp.id}')" class="p-3 border-b hover:bg-gray-50 cursor-pointer flex justify-between items-center ${selectedEmployee?.id === emp.id ? 'bg-blue-50' : ''}">
-            <div class="flex items-center gap-2">
-                ${emp.profilePic ? `<img src="${emp.profilePic}" class="w-8 h-8 rounded-full object-cover">` : `<div class="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center"><i data-lucide="user" class="w-4 h-4 text-gray-400"></i></div>`}
-                <div><p class="font-bold text-sm text-gray-800">${emp.name}</p><p class="text-xs text-blue-600">${emp.department}</p></div>
-            </div>
-        </div>
-    `).join('');
-};
-
-window.selectEmployee = (id) => { 
-    selectedEmployee = employees.find(e => e.id === id); 
-    window.loadPeriodData(); 
-    document.getElementById('empty-state').classList.add('hidden'); 
-    document.getElementById('editor-area').classList.remove('hidden'); 
-    window.renderEmployeeList();
-};
-
-// Modal Functions
 window.openStaffModal = (id) => {
     document.getElementById('add-modal').classList.remove('hidden');
-    // Populate Select
     const sel = document.getElementById('form-department');
     sel.innerHTML = DEFAULT_DEPTS.map(d => `<option value="${d}">${d}</option>`).join('');
 };
@@ -606,7 +686,6 @@ function updateAppLogo(url) {
     if(c) c.classList.add('hidden');
 }
 
-// Misc Helpers
 window.openSettings = () => document.getElementById('settings-modal').classList.remove('hidden');
 window.closeSettings = () => document.getElementById('settings-modal').classList.add('hidden');
 window.switchView = (v) => {
@@ -651,10 +730,12 @@ window.bulkSavePayroll = async () => {
     alert("History Log Saved!");
 };
 window.bulkResetPayroll = async () => {
-    if(!confirm("RESET all data for this month?")) return;
+    const targetStr = currentFilter.department === 'All' ? 'ALL Staff' : currentFilter.department;
+    if(!confirm(`RESET payroll for ${targetStr}?`)) return;
     const key = `${editorYear}-${editorMonth}`;
+    const targetEmployees = currentFilter.department === 'All' ? employees : employees.filter(e => e.department === currentFilter.department);
     let c = 0;
-    for(const emp of employees) {
+    for(const emp of targetEmployees) {
         if(emp.payrollHistory && emp.payrollHistory[key]) {
             delete emp.payrollHistory[key];
             await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.put(emp));
@@ -665,8 +746,10 @@ window.bulkResetPayroll = async () => {
     initApp();
 };
 window.deleteAllEmployeesInFilter = async () => {
-    if(!confirm("DELETE ALL STAFF?")) return;
-    for(const emp of employees) await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.delete(emp.id));
+    const targetStr = currentFilter.department === 'All' ? 'ALL Staff' : currentFilter.department;
+    if(!confirm(`DELETE ${targetStr}?`)) return;
+    const targetEmployees = currentFilter.department === 'All' ? employees : employees.filter(e => e.department === currentFilter.department);
+    for(const emp of targetEmployees) await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.delete(emp.id));
     initApp();
 };
 window.removeLoan = async (idx) => {
@@ -683,7 +766,7 @@ window.downloadTemplate = (dept) => {
     link.setAttribute("download", `Template_${dept}.csv`);
     document.body.appendChild(link); link.click(); link.remove();
 };
-window.handleBulkCSVPayslipUpload = (input) => alert("Bulk CSV Upload Logic Here");
+window.handleBulkCSVPayslipUpload = (input) => alert("Bulk CSV Upload Feature Placeholder");
 window.toggleBankFields = () => {
     const d = document.getElementById('form-department').value;
     const usd = document.getElementById('bank-usd-container');
