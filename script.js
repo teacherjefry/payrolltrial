@@ -1,4 +1,4 @@
-// --- 1. FIREBASE SETUP (MUST BE AT TOP) ---
+// --- 1. FIREBASE SETUP ---
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { getFirestore, collection, getDocs, setDoc, doc, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
@@ -11,7 +11,6 @@ const firebaseConfig = {
   appId: "1:974433788853:web:be6eadac8ec50e3808affc"
 };
 
-// Initialize connection
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
@@ -40,17 +39,12 @@ window.transact = async function(storeName, mode, operation) {
 
 // --- 3. APP CONSTANTS ---
 const STORE_EMPLOYEES = 'employees';
+const STORE_HISTORY = 'history_logs';
 const STORE_CONFIG = 'department_configs';
 const ACADEMIC_DEPTS = ['Kindergarten', 'Primary', 'Secondary', 'English', 'Vice Principal'];
 const GS_DEPTS = ['Accounts (ບັນຊີ)', 'Admin (ບໍລິຫານ)', 'Secretary (ເລຂານຸການ)', 'Invitational Teachers', 'Cooks', 'Cleaners', 'Drivers', 'Repair'];
 const DEFAULT_DEPTS = [...ACADEMIC_DEPTS, ...GS_DEPTS];
 const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-
-const LAO_FIELDS = {
-    basic: 'ເງີນເດືອນພື້ນຖານ', 
-    accumulated: 'ເງີນສະສົມປີຜ່ານມາ',
-    increase: 'ເພີ້ມປະຈຳປີ 2025-2026'
-};
 
 // Global State
 let employees = [];
@@ -94,9 +88,55 @@ async function initApp() {
         if (window.lucide) lucide.createIcons();
     } catch(e) { 
         console.error("Firebase Load Fail:", e); 
-        alert("Error connecting to database. Check console.");
     }
 }
+
+// === IMPORT DATA FUNCTION (New Feature) ===
+window.importData = (input) => {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    
+    // Show loading state
+    const btnText = input.previousElementSibling.innerText;
+    input.previousElementSibling.innerText = "Uploading to Cloud...";
+    
+    reader.onload = async (e) => {
+        try {
+            const data = JSON.parse(e.target.result);
+            console.log("Starting Import...", data);
+
+            // 1. Import Configs
+            const configs = data.config || data.departmentConfigs || [];
+            const configArray = Array.isArray(configs) ? configs : Object.values(configs);
+            for (const cfg of configArray) {
+                if(cfg.name) await window.transact(STORE_CONFIG, 'readwrite', s => s.put(cfg));
+            }
+
+            // 2. Import Employees
+            if (data.employees) {
+                for (const emp of data.employees) {
+                    await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.put(emp));
+                }
+            }
+
+            // 3. Import History
+            if (data.history) {
+                for (const h of data.history) {
+                    await window.transact(STORE_HISTORY, 'readwrite', s => s.put(h));
+                }
+            }
+
+            alert("Data successfully imported to Firebase Cloud!");
+            window.location.reload();
+        } catch (err) {
+            console.error(err);
+            alert("Error parsing backup file. Check console for details.");
+            input.previousElementSibling.innerText = btnText;
+        }
+    };
+    reader.readAsText(file);
+};
 
 // Launch Button
 window.launchApp = function() {
@@ -166,7 +206,6 @@ window.loadPeriodData = () => {
     editorYear = document.getElementById('editor-year').value;
     const key = `${editorYear}-${editorMonth}`;
     
-    // Default empty state
     currentPayrollState = { notes: "" };
     
     if (selectedEmployee.payrollHistory && selectedEmployee.payrollHistory[key]) {
@@ -180,7 +219,6 @@ window.loadPeriodData = () => {
 function renderEditor() {
     const content = document.getElementById('editor-content');
     const dept = selectedEmployee.department;
-    // Simplified editor generation for brevity
     content.innerHTML = `
         <div class="p-4 border rounded bg-gray-50">
             <h3 class="font-bold text-blue-900 mb-2">${dept} Payroll</h3>
@@ -252,7 +290,7 @@ window.saveEmployee = async (e) => {
     };
     await window.transact(STORE_EMPLOYEES, 'readwrite', s => s.put(newEmp));
     window.closeModal();
-    initApp(); // Refresh list
+    initApp(); 
 };
 
 // Populate Dept Select
@@ -270,6 +308,5 @@ window.switchView = (v) => {
 };
 
 window.updateDashboardStats = () => {
-    // Placeholder for dashboard logic
     document.getElementById('stat-employees').innerText = employees.length;
 };
