@@ -1,0 +1,57 @@
+:root {
+    --primary-900: #1e3a8a;
+    --primary-800: #1e40af;
+    --primary-600: #2563eb;
+    --primary-50: #eff6ff;
+}
+
+body { font-family: 'Inter', 'Noto Sans Lao', sans-serif; }
+.font-hero { font-family: 'Playfair Display', serif; }
+
+body.view-landing {
+    background-image: url('https://images.unsplash.com/photo-1554224155-6726b3ff858f?ixlib=rb-1.2.1&auto=format&fit=crop&w=1950&q=80');
+    background-attachment: fixed;
+    background-size: cover;
+}
+
+.glass {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.glass-hero {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(15px);
+    border-radius: 2rem;
+    padding: 3rem;
+    display: inline-block;
+}
+
+/* Feature Cards */
+.feature-card {
+    background: rgba(255, 255, 255, 0.65);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: 1.5rem;
+    transition: all 0.4s ease;
+}
+.feature-card:hover {
+    transform: translateY(-5px) scale(1.03);
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.hover-3d { transition: all 0.4s; transform-style: preserve-3d; }
+.hover-3d:hover { transform: translateY(-5px); }
+
+/* Color Mappings for Tailwind compatibility */
+.bg-blue-900 { background-color: var(--primary-900) !important; }
+.text-blue-900 { color: var(--primary-900) !important; }
+
+/* Print Styles */
+@media print {
+    #landing-view, header, aside, .no-print { display: none !important; }
+    #app-view, #app-content, #view-payroll, #payroll-workspace, #editor-area { display: block !important; height: auto !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+    #editor-area > div:first-child { display: none !important; } /* Hide editor sidebar */
+    #preview-pane { display: block !important; width: 100% !important; border: none !important; box-shadow: none !important; }
+}
