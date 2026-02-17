@@ -178,9 +178,21 @@
             <div id="settings-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-[150] p-4">
                 <div class="bg-white rounded-xl p-6 w-full max-w-sm">
                     <h2 class="text-xl font-bold mb-4">Settings</h2>
-                    <label class="block text-xs font-bold text-gray-500 uppercase mb-2">School Logo</label>
-                    <input type="file" accept="image/*" onchange="window.handleLogoUpload(this)" class="w-full text-xs">
-                    <button onclick="window.closeSettings()" class="w-full mt-4 py-2 border rounded">Close</button>
+                    
+                    <div class="mb-4">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">School Logo</label>
+                        <input type="file" accept="image/*" onchange="window.handleLogoUpload(this)" class="w-full text-xs">
+                    </div>
+
+                    <div class="mb-6 pt-4 border-t border-gray-100">
+                        <label class="block text-xs font-bold text-gray-500 uppercase mb-2">Data Management</label>
+                        <button onclick="document.getElementById('import-file').click()" class="flex items-center justify-center gap-2 w-full py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded hover:bg-blue-100 text-sm font-medium transition-colors">
+                            <i data-lucide="upload" class="w-4 h-4"></i> Import / Restore Data
+                        </button>
+                        <input type="file" id="import-file" accept=".json" class="hidden" onchange="window.importData(this)">
+                    </div>
+
+                    <button onclick="window.closeSettings()" class="w-full py-2 border rounded text-gray-600 hover:bg-gray-100">Close</button>
                 </div>
             </div>
         </div>
