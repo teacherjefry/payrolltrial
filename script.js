@@ -14,7 +14,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
-// --- 2. DATABASE BRIDGE ---
+// --- 2. DATABASE BRIDGE (Connects App to Firebase) ---
 window.transact = async function(storeName, mode, operation) {
     const proxy = {
         getAll: async () => {
@@ -22,7 +22,9 @@ window.transact = async function(storeName, mode, operation) {
             return snap.docs.map(d => d.data());
         },
         put: async (data) => {
+            // Determine unique ID based on data type or fallback to "settings"
             const key = data.id || data.dateId || data.name || "settings"; 
+            // Ensure key is a string to prevent Firestore errors
             await setDoc(doc(db, storeName, String(key)), data);
             return data;
         },
@@ -483,7 +485,13 @@ window.importData = (input) => {
     
     reader.onload = async (e) => {
         try {
-            const data = JSON.parse(e.target.result);
+            // FIX JSON ERROR: Clean file of invisible "BOM" characters
+            let rawData = e.target.result.trim();
+            if (rawData.charCodeAt(0) === 0xFEFF) {
+                rawData = rawData.slice(1);
+            }
+
+            const data = JSON.parse(rawData);
             console.log("Restoring Backup:", data);
 
             // 1. Configs
