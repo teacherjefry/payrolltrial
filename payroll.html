@@ -258,38 +258,45 @@
 
     </div>
 <script>
-    // --- 0. FIREBASE CONFIGURATION ---
-    const firebaseConfig = {
-        apiKey: "AIzaSyBHhZ_MIofETSRT37nVBSNDAwOexrdDuwA",
-        authDomain: "neerada-payroll.firebaseapp.com",
-        projectId: "neerada-payroll",
-        storageBucket: "neerada-payroll.firebasestorage.app",
-        messagingSenderId: "974433788853",
-        appId: "1:974433788853:web:be6eadac8ec50e3808affc"
-    };
+    // --- 0. ROBUST INITIALIZATION ---
+    let firestore = null;
+    let isOffline = false;
 
-    // Initialize Firebase
-    firebase.initializeApp(firebaseConfig);
-    const firestore = firebase.firestore();
-    
-    // Enable Offline Persistence (Works like magic for spotty internet)
-    firestore.enablePersistence().catch(err => {
-        if (err.code == 'failed-precondition') {
-            console.log("Multiple tabs open, persistence can only be enabled in one.");
-        } else if (err.code == 'unimplemented') {
-            console.log("Browser doesn't support persistence");
+    try {
+        const firebaseConfig = {
+            apiKey: "AIzaSyBHhZ_MIofETSRT37nVBSNDAwOexrdDuwA",
+            authDomain: "neerada-payroll.firebaseapp.com",
+            projectId: "neerada-payroll",
+            storageBucket: "neerada-payroll.firebasestorage.app",
+            messagingSenderId: "974433788853",
+            appId: "1:974433788853:web:be6eadac8ec50e3808affc"
+        };
+
+        // Attempt to load Firebase
+        if (typeof firebase !== 'undefined') {
+            firebase.initializeApp(firebaseConfig);
+            firestore = firebase.firestore();
+            console.log("Firebase Connected");
+            
+            // Try to enable offline persistence (silently fail if not supported)
+            firestore.enablePersistence().catch(err => console.log("Persistence warning:", err.code));
+        } else {
+            throw new Error("Firebase SDK not loaded. Check Internet connection.");
         }
-    });
+    } catch (e) {
+        console.error("System Launch Error:", e);
+        isOffline = true;
+        alert("Warning: Could not connect to the Cloud Database.\n\nReason: " + e.message + "\n\nPlease check your internet connection and refresh.");
+    }
 
+    // --- 1. MAIN APPLICATION ---
     const App = {
-        // --- 1. STATE MANAGEMENT ---
         State: {
             employees: [],
             history: [],
             configs: {},
             editor: { id: null, month: '', year: 2026 },
             constants: {
-                // Collection Names in Firebase
                 COLL_EMP: 'employees',
                 COLL_HIST: 'history_logs',
                 COLL_CFG: 'department_configs',
@@ -297,60 +304,42 @@
             }
         },
 
-        // --- 2. DATABASE LAYER (Firebase Wrapper) ---
         DB: {
-            // Fetch all documents from a collection
             async getAll(collectionName) {
+                if(isOffline || !firestore) return [];
                 try {
                     const snapshot = await firestore.collection(collectionName).get();
                     return snapshot.docs.map(doc => doc.data());
                 } catch (error) {
-                    console.error("Error getting documents: ", error);
+                    console.error("DB Error:", error);
                     return [];
                 }
             },
-
-            // Save a document (Create or Update)
             async save(collectionName, data, idField = 'id') {
+                if(isOffline || !firestore) { alert("Cannot save: You are offline."); return; }
                 try {
                     const docId = data[idField];
-                    if (!docId) throw new Error("Document missing ID field: " + idField);
                     await firestore.collection(collectionName).doc(docId).set(data);
-                    console.log(`Saved to ${collectionName}: ${docId}`);
+                    console.log(`Saved: ${docId}`);
                 } catch (error) {
-                    console.error("Error saving document: ", error);
-                    alert("Error saving data: " + error.message);
+                    alert("Save failed: " + error.message);
                 }
             },
-
-            // Delete a document
-            async delete(collectionName, docId) {
-                try {
-                    await firestore.collection(collectionName).doc(docId).delete();
-                } catch (error) {
-                    console.error("Error removing document: ", error);
-                    alert("Error deleting: " + error.message);
-                }
-            },
-
-            // Clear a collection (Used for restores)
             async clearCollection(collectionName) {
+                if(isOffline || !firestore) return;
                 const snapshot = await firestore.collection(collectionName).get();
                 const batch = firestore.batch();
-                snapshot.docs.forEach((doc) => {
-                    batch.delete(doc.ref);
-                });
+                snapshot.docs.forEach((doc) => batch.delete(doc.ref));
                 await batch.commit();
             }
         },
 
-        // --- 3. BUSINESS LOGIC ---
         Logic: {
             Config: {
                 initDefaults: async () => {
-                    // Check if configs exist in Firebase, if not, create them
+                    if(isOffline) return;
                     const existing = await App.DB.getAll(App.State.constants.COLL_CFG);
-                    if (existing.length > 0) return; // Already initialized
+                    if (existing.length > 0) return;
 
                     const LAO_STRUCT = ['Research/Dev', 'Media/Activities', 'Behavior (Basic)', 'Class Resp', 'Policy', 'Basic Salary', 'Certificate', 'Homeroom', 'Behavior (Start)', 'Start Pay', 'Accumulated', 'Increase 25-26'];
                     const DEDUCTIONS = ['Tax 5%', 'Social Security 5.5%', 'Late', 'Others'];
@@ -360,154 +349,98 @@
                         let earnings = [...LAO_STRUCT];
                         if(d === 'English') earnings = []; 
                         if(d === 'General Services') earnings = ['Salary (LAK)', 'Allowance', 'OT'];
-                        
                         const cfg = { name: d, earnings, deductions: [...DEDUCTIONS] };
                         await App.DB.save(App.State.constants.COLL_CFG, cfg, 'name');
                         App.State.configs[d] = cfg;
                     }
                 }
             },
-            
             Calculations: {
                 run(emp, monthData) {
                     if(!monthData) return { lak: 0, usd: 0 };
                     const d = monthData;
-
-                    // A. ENGLISH DEPARTMENT
                     if(emp.department === 'English') {
                         const ot = (d.otHours||0) * (d.otRate||0);
                         const grossUSD = (d.basicPay||0) + (d.accumulated||0) + (d.increase||0) + (d.earningsOthersUSD||0) + ot;
                         const dedUSD = (d.profTax||0) + (d.absences||0) + (d.visa||0) + (d.deductionsOthersUSD||0);
                         const netUSD = grossUSD - dedUSD;
-                        
                         const convertible = netUSD - (d.cashOut||0);
                         const convertedLAK = convertible * (d.exchangeRate||0);
                         const extraLAK = (d.itLAK||0) + (d.extraWorkOthersLAK||0) + (d.stipendLAK||0);
                         const dedLAK = (d.insuranceLAK||0) + (d.deductionsOthersLAK||0);
-                        
-                        return { 
-                            lak: Math.max(0, convertedLAK + extraLAK - dedLAK), 
-                            usd: d.cashOut||0, 
-                            grossUSD, netUSD 
-                        };
+                        return { lak: Math.max(0, convertedLAK + extraLAK - dedLAK), usd: d.cashOut||0, grossUSD, netUSD };
                     }
-
-                    // B. STANDARD LAO / GS
-                    let totalEarn = 0;
-                    let totalDed = 0;
-                    
+                    let totalEarn = 0; let totalDed = 0;
                     const cfg = App.State.configs[emp.department] || { earnings: [], deductions: [] };
-                    
-                    // Smart Summation
                     if(App.Logic.isLaoAcademic(emp.department)) {
                         const startIndex = cfg.earnings.indexOf('Start Pay');
-                        cfg.earnings.forEach((f, i) => {
-                            // Sum only from Start Pay onwards, or all if Start Pay missing
-                            if(i >= startIndex || startIndex === -1) totalEarn += (d[f]||0);
-                        });
+                        cfg.earnings.forEach((f, i) => { if(i >= startIndex || startIndex === -1) totalEarn += (d[f]||0); });
                     } else {
                         cfg.earnings.forEach(f => totalEarn += (d[f]||0));
                     }
-                    
                     totalEarn += (d.overtimeAmount||0);
                     cfg.deductions.forEach(f => totalDed += (d[f]||0));
                     totalDed += (d.loanDeduction||0);
-
                     return { lak: Math.max(0, totalEarn - totalDed), usd: 0 };
                 },
-                
                 autoSumLaoFields(data) {
                     const basic = (data['Research/Dev']||0) + (data['Media/Activities']||0) + (data['Behavior (Basic)']||0) + (data['Class Resp']||0) + (data['Policy']||0);
                     data['Basic Salary'] = basic;
-                    
                     const start = basic + (data['Certificate']||0) + (data['Homeroom']||0) + (data['Behavior (Start)']||0);
                     data['Start Pay'] = start;
                     return data;
                 }
             },
-
             format: {
                 money: (n) => '₭ ' + parseFloat(n||0).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
                 usd: (n) => '$' + parseFloat(n||0).toLocaleString('en-US', {minimumFractionDigits: 2}),
                 id: (emp, m, y) => `${(emp.campus||'GS').substring(0,3).toUpperCase()}-${(emp.department||'U').substring(0,1).toUpperCase()}-${emp.name.split(' ')[0].toUpperCase()}-${m.substring(0,3).toUpperCase()}`
             },
-
             isLaoAcademic: (dept) => !['English', 'General Services', 'Accounts'].includes(dept),
-            
             Data: {
                 async saveStaff(e) {
                     e.preventDefault();
                     const fd = new FormData(e.target);
                     const data = Object.fromEntries(fd.entries());
-                    
                     const existing = App.State.employees.find(x => x.id === data.id);
-                    const emp = { 
-                        ...existing, 
-                        ...data, 
-                        id: data.id || 'EMP_' + Date.now(),
-                        lastModified: new Date().toISOString()
-                    };
-                    
-                    // Firebase Save
+                    const emp = { ...existing, ...data, id: data.id || 'EMP_' + Date.now(), lastModified: new Date().toISOString() };
                     await App.DB.save(App.State.constants.COLL_EMP, emp, 'id');
-                    
-                    // Refresh Local State
                     await App.Logic.Data.refreshAll();
                     App.UI.renderStaffList();
                     App.UI.Modals.close('staff');
                     App.UI.updateDashboard();
                 },
-
-                // New helper to reload data from Firebase
                 async refreshAll() {
+                    if(isOffline) return;
                     App.State.employees = await App.DB.getAll(App.State.constants.COLL_EMP);
                     App.State.history = await App.DB.getAll(App.State.constants.COLL_HIST);
                     const cfgs = await App.DB.getAll(App.State.constants.COLL_CFG);
                     cfgs.forEach(c => App.State.configs[c.name] = c);
                 },
-
                 async triggerImport() {
-                    // Simple file input trigger
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = '.csv';
+                    const input = document.createElement('input'); input.type = 'file'; input.accept = '.csv';
                     input.onchange = e => alert("CSV Import logic would go here. (Requires mapping)");
                     input.click();
                 },
-                
-                copyPrevious() {
-                    alert("Logic to copy previous month data to current month editor.");
-                },
-
+                copyPrevious() { alert("Feature: Copy previous month data coming soon."); },
                 exportBackup() {
-                    const exportObj = {
-                        employees: App.State.employees,
-                        history: App.State.history,
-                        configs: App.State.configs,
-                        timestamp: Date.now()
-                    };
+                    const exportObj = { employees: App.State.employees, history: App.State.history, configs: App.State.configs, timestamp: Date.now() };
                     const blob = new Blob([JSON.stringify(exportObj)], {type: 'application/json'});
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a'); a.href = url; a.download = `Neerada_Backup_${new Date().toISOString().split('T')[0]}.json`;
                     a.click();
                 },
-
                 async importBackup(input) {
-                    const file = input.files[0];
-                    if(!file) return;
+                    const file = input.files[0]; if(!file) return;
                     const reader = new FileReader();
                     reader.onload = async (e) => {
                         const data = JSON.parse(e.target.result);
                         if(confirm(`Restore backup from ${new Date(data.timestamp).toLocaleDateString()}? WARNING: This overwrites Cloud Data.`)) {
-                            // Clear and Restore
                             await App.DB.clearCollection(App.State.constants.COLL_EMP);
                             for(const emp of data.employees) await App.DB.save(App.State.constants.COLL_EMP, emp, 'id');
-                            
                             await App.DB.clearCollection(App.State.constants.COLL_CFG);
-                            // Handle object vs array format for configs
                             const cfgs = Array.isArray(data.configs) ? data.configs : Object.values(data.configs);
                             for(const c of cfgs) await App.DB.save(App.State.constants.COLL_CFG, c, 'name');
-
                             location.reload();
                         }
                     };
@@ -516,7 +449,6 @@
             }
         },
 
-        // --- 4. UI CONTROLLER ---
         UI: {
             launch() {
                 document.getElementById('landing-view').classList.add('hidden');
@@ -525,7 +457,6 @@
                 App.UI.updateDashboard();
                 App.UI.renderStaffList();
             },
-
             switchTab(tab) {
                 document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden'));
                 document.getElementById('view-'+tab).classList.remove('hidden');
@@ -533,75 +464,53 @@
                 document.querySelector(`button[data-tab="${tab}"]`).className = "tab-btn px-4 py-1.5 text-sm font-medium rounded-md bg-blue-900 text-white shadow-inner";
                 if(tab === 'dashboard') App.UI.updateDashboard();
             },
-
             initSelectors() {
                 const y = new Date().getFullYear();
                 const m = App.State.constants.MONTHS[new Date().getMonth()];
-                
                 document.getElementById('dash-year').innerHTML = [y-1, y, y+1].map(v => `<option value="${v}">${v}</option>`).join('');
                 document.getElementById('dash-year').value = y;
                 document.getElementById('dash-month').innerHTML = App.State.constants.MONTHS.map(v => `<option value="${v}">${v}</option>`).join('');
                 document.getElementById('dash-month').value = m;
-
                 document.getElementById('editor-year').innerHTML = document.getElementById('dash-year').innerHTML;
                 document.getElementById('editor-year').value = y;
                 document.getElementById('editor-month').innerHTML = document.getElementById('dash-month').innerHTML;
                 document.getElementById('editor-month').value = m;
-                
-                App.State.editor.month = m;
-                App.State.editor.year = y;
-                
+                App.State.editor.month = m; App.State.editor.year = y;
                 const depts = Object.keys(App.State.configs);
                 document.getElementById('filter-dept').innerHTML = `<option value="All">All Departments</option>` + depts.map(d => `<option value="${d}">${d}</option>`).join('');
                 document.getElementById('modal-dept-select').innerHTML = depts.map(d => `<option value="${d}">${d}</option>`).join('');
                 document.getElementById('date-display').innerText = new Date().toLocaleDateString();
             },
-
             updateDashboard() {
                 const y = document.getElementById('dash-year').value;
                 const m = document.getElementById('dash-month').value;
                 const key = `${y}-${m}`;
-                
                 let totLAK = 0, totUSD = 0, count = 0;
-                
                 App.State.employees.forEach(emp => {
                     if(emp.payrollHistory && emp.payrollHistory[key]) {
                         const res = App.Logic.Calculations.run(emp, emp.payrollHistory[key]);
-                        totLAK += res.lak;
-                        totUSD += res.usd;
-                        count++;
+                        totLAK += res.lak; totUSD += res.usd; count++;
                     }
                 });
-
                 document.getElementById('stat-lak').innerText = App.Logic.format.money(totLAK);
                 document.getElementById('stat-usd').innerText = App.Logic.format.usd(totUSD);
                 document.getElementById('stat-count').innerText = count;
-                
                 const hist = App.State.history.sort((a,b) => new Date(b.timestamp) - new Date(a.timestamp));
                 document.getElementById('history-log-container').innerHTML = hist.map(h => 
-                    `<div class="p-3 border-b flex justify-between items-center text-sm">
-                        <div><span class="font-bold text-blue-900">${h.month} ${h.year}</span> <span class="text-xs text-gray-500">(${new Date(h.timestamp).toLocaleDateString()})</span></div>
-                        <div class="font-mono">${App.Logic.format.money(h.totalLAK)}</div>
-                    </div>`
+                    `<div class="p-3 border-b flex justify-between items-center text-sm"><div><span class="font-bold text-blue-900">${h.month} ${h.year}</span> <span class="text-xs text-gray-500">(${new Date(h.timestamp).toLocaleDateString()})</span></div><div class="font-mono">${App.Logic.format.money(h.totalLAK)}</div></div>`
                 ).join('');
             },
-
             renderStaffList() {
                 const filter = document.getElementById('filter-dept').value;
                 let list = App.State.employees;
                 if(filter !== 'All') list = list.filter(e => e.department === filter);
-                
                 document.getElementById('staff-list').innerHTML = list.map(e => `
                     <div onclick="App.UI.selectEmployee('${e.id}')" class="p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-blue-400 hover:shadow-sm transition-all ${App.State.editor.id === e.id ? 'border-l-4 border-l-blue-600 ring-1 ring-blue-100' : ''}">
                         <div class="font-bold text-gray-800 text-sm">${e.name}</div>
-                        <div class="text-xs text-gray-500 flex justify-between">
-                            <span>${e.department}</span>
-                            <span>${e.position}</span>
-                        </div>
+                        <div class="text-xs text-gray-500 flex justify-between"><span>${e.department}</span><span>${e.position}</span></div>
                     </div>
                 `).join('');
             },
-
             selectEmployee(id) {
                 App.State.editor.id = id;
                 document.getElementById('empty-state').classList.add('hidden');
@@ -610,71 +519,53 @@
                 App.UI.renderStaffList();
                 App.UI.loadPeriod();
             },
-
             loadPeriod() {
                 if(!App.State.editor.id) return;
                 const emp = App.State.employees.find(e => e.id === App.State.editor.id);
                 App.State.editor.month = document.getElementById('editor-month').value;
                 App.State.editor.year = document.getElementById('editor-year').value;
                 const key = `${App.State.editor.year}-${App.State.editor.month}`;
-                
                 let data = (emp.payrollHistory && emp.payrollHistory[key]) ? emp.payrollHistory[key] : {};
                 App.UI.renderEditor(emp, data);
                 App.UI.renderPreview(emp, data);
             },
-
             renderEditor(emp, data) {
                 const container = document.getElementById('editor-inputs');
                 let html = '';
-                
                 if(emp.department === 'English') {
-                    const fields = [
-                        {l:'Exchange Rate', k:'exchangeRate'}, {l:'Cash Out ($)', k:'cashOut'},
-                        {l:'Basic Pay ($)', k:'basicPay'}, {l:'Accumulated ($)', k:'accumulated'},
-                        {l:'Increase ($)', k:'increase'}, {l:'OT Hours', k:'otHours'},
-                        {l:'OT Rate', k:'otRate'}, {l:'Prof Tax ($)', k:'profTax'},
-                        {l:'Absences ($)', k:'absences'}, {l:'Visa ($)', k:'visa'}
-                    ];
+                    const fields = [{l:'Exchange Rate', k:'exchangeRate'}, {l:'Cash Out ($)', k:'cashOut'}, {l:'Basic Pay ($)', k:'basicPay'}, {l:'Accumulated ($)', k:'accumulated'}, {l:'Increase ($)', k:'increase'}, {l:'OT Hours', k:'otHours'}, {l:'OT Rate', k:'otRate'}, {l:'Prof Tax ($)', k:'profTax'}, {l:'Absences ($)', k:'absences'}, {l:'Visa ($)', k:'visa'}];
                     html = `<div class="grid grid-cols-2 gap-2">` + fields.map(f => `<div><label class="text-[10px] font-bold text-gray-500 uppercase">${f.l}</label><input type="number" oninput="App.UI.handleInput('${f.k}', this.value)" value="${data[f.k]||0}" class="w-full border rounded p-1.5 text-sm"></div>`).join('') + `</div>`;
                 } else {
                     const cfg = App.State.configs[emp.department] || {earnings:[], deductions:[]};
                     const isLao = App.Logic.isLaoAcademic(emp.department);
-                    
                     html += `<div class="space-y-4"><div class="bg-blue-50 p-3 rounded-lg border border-blue-100"><h4 class="font-bold text-blue-900 text-xs uppercase mb-2">Earnings (LAK)</h4><div class="grid grid-cols-1 gap-2">`;
                     cfg.earnings.forEach(f => {
                         const isAuto = isLao && (f === 'Basic Salary' || f === 'Start Pay');
                         html += `<div><label class="text-[10px] font-bold text-gray-500 truncate block">${f}</label><input type="number" ${isAuto ? 'readonly tabindex="-1"' : ''} oninput="App.UI.handleInput('${f}', this.value)" value="${data[f]||0}" class="w-full border rounded p-1.5 text-sm ${isAuto ? 'bg-gray-100 font-bold text-gray-600' : 'bg-white'}"></div>`;
                     });
                     html += `</div></div><div class="bg-red-50 p-3 rounded-lg border border-red-100"><h4 class="font-bold text-red-900 text-xs uppercase mb-2">Deductions</h4><div class="grid grid-cols-2 gap-2">`;
-                    cfg.deductions.forEach(f => {
-                        html += `<div><label class="text-[10px] font-bold text-gray-500 truncate block">${f}</label><input type="number" oninput="App.UI.handleInput('${f}', this.value)" value="${data[f]||0}" class="w-full border rounded p-1.5 text-sm text-red-600"></div>`;
-                    });
+                    cfg.deductions.forEach(f => { html += `<div><label class="text-[10px] font-bold text-gray-500 truncate block">${f}</label><input type="number" oninput="App.UI.handleInput('${f}', this.value)" value="${data[f]||0}" class="w-full border rounded p-1.5 text-sm text-red-600"></div>`; });
                     html += `</div></div></div>`;
                 }
                 container.innerHTML = html;
             },
-
             handleInput(key, val) {
                 const emp = App.State.employees.find(e => e.id === App.State.editor.id);
                 const k = `${App.State.editor.year}-${App.State.editor.month}`;
                 if(!emp.payrollHistory) emp.payrollHistory = {};
                 if(!emp.payrollHistory[k]) emp.payrollHistory[k] = {};
                 emp.payrollHistory[k][key] = parseFloat(val) || 0;
-                
                 if(App.Logic.isLaoAcademic(emp.department)) {
                     emp.payrollHistory[k] = App.Logic.Calculations.autoSumLaoFields(emp.payrollHistory[k]);
                     App.UI.renderEditor(emp, emp.payrollHistory[k]);
-                    const input = document.querySelector(`input[oninput*="'${key}'"]`);
-                    if(input) input.focus();
+                    const input = document.querySelector(`input[oninput*="'${key}'"]`); if(input) input.focus();
                 }
                 App.UI.renderPreview(emp, emp.payrollHistory[k]);
             },
-
             renderPreview(emp, data) {
                 const res = App.Logic.Calculations.run(emp, data);
                 const pid = App.Logic.format.id(emp, App.State.editor.month, App.State.editor.year);
                 let detailsHTML = '';
-                
                 if(emp.department === 'English') {
                     detailsHTML = `<div class="grid grid-cols-2 gap-4 text-sm border-t pt-4"><div><h4 class="font-bold text-blue-800 mb-2">Earnings ($)</h4><div class="flex justify-between"><span>Basic</span><span>${data.basicPay||0}</span></div><div class="flex justify-between"><span>OT</span><span>${(data.otHours*data.otRate)||0}</span></div><div class="flex justify-between font-bold mt-2"><span>Gross</span><span>${App.Logic.format.usd(res.grossUSD)}</span></div></div><div><h4 class="font-bold text-red-800 mb-2">Deductions</h4><div class="flex justify-between"><span>Tax/Abs/Visa</span><span>${(res.grossUSD - res.netUSD).toFixed(2)}</span></div><div class="flex justify-between"><span>LAK Deductions</span><span>${(data.insuranceLAK||0)}</span></div></div></div><div class="mt-4 bg-gray-100 p-2 rounded text-center"><div class="text-xs text-gray-500">Exchange Rate: ${data.exchangeRate||0}</div><div class="font-bold text-xl text-blue-900">PAY: ${App.Logic.format.money(res.lak)}</div><div class="text-sm text-green-700">Cash Out: ${App.Logic.format.usd(res.usd)}</div></div>`;
                 } else {
@@ -683,18 +574,14 @@
                     cfg.earnings.forEach(f => { if(data[f] > 0) detailsHTML += `<div class="flex justify-between border-b border-gray-100"><span>${f}</span><span class="font-mono">${App.Logic.format.money(data[f])}</span></div>`; });
                     detailsHTML += `</div><div class="mt-6 p-4 bg-blue-900 text-white rounded-lg flex justify-between items-center shadow-lg"><span class="font-bold">NET PAY</span><span class="font-mono text-2xl font-bold">${App.Logic.format.money(res.lak)}</span></div>`;
                 }
-
                 document.getElementById('preview-pane').innerHTML = `<div class="text-center border-b pb-4 mb-4"><h2 class="font-hero text-2xl font-bold text-blue-900">Neerada School</h2><p class="text-xs text-gray-500">PAYSLIP: ${App.State.editor.month} ${App.State.editor.year}</p></div><div class="flex justify-between text-xs text-gray-600 mb-4"><div><p><span class="font-bold">Name:</span> ${emp.name}</p><p><span class="font-bold">Position:</span> ${emp.position}</p></div><div class="text-right"><p><span class="font-bold">ID:</span> ${pid}</p><p><span class="font-bold">Dept:</span> ${emp.department}</p></div></div>${detailsHTML}`;
             },
-
             async saveCurrent() {
                 const emp = App.State.employees.find(e => e.id === App.State.editor.id);
-                // Data updated in memory, now sync to Firebase
                 await App.DB.save(App.State.constants.COLL_EMP, emp, 'id');
                 alert("Saved to Cloud!");
                 App.UI.updateDashboard();
             },
-
             resetCurrent() {
                 if(!confirm("Clear data for this month?")) return;
                 const emp = App.State.employees.find(e => e.id === App.State.editor.id);
@@ -702,33 +589,36 @@
                 emp.payrollHistory[k] = {};
                 App.UI.selectEmployee(emp.id);
             },
-
             Modals: {
                 open(id) { document.getElementById('modal-'+id).classList.remove('hidden'); document.getElementById('modal-'+id).classList.add('flex'); },
                 close(id) { document.getElementById('modal-'+id).classList.add('hidden'); document.getElementById('modal-'+id).classList.remove('flex'); }
             }
         },
 
-        // --- 5. INITIALIZATION ---
         init: async () => {
-            // Fetch initial data from Firebase
-            await App.Logic.Data.refreshAll();
+            // EXPOSE APP IMMEDIATELY
+            window.App = App;
             
-            // Check if First Run (Empty Database)
-            if(Object.keys(App.State.configs).length === 0) {
-                console.log("Initializing Defaults...");
-                await App.Logic.Config.initDefaults();
-                await App.Logic.Data.refreshAll();
+            // Try to load data in background
+            if(!isOffline) {
+                try {
+                    await App.Logic.Data.refreshAll();
+                    if(Object.keys(App.State.configs).length === 0) {
+                        await App.Logic.Config.initDefaults();
+                        await App.Logic.Data.refreshAll();
+                    }
+                } catch(e) {
+                    console.log("Background load failed:", e);
+                }
             }
 
             if(document.body.classList.contains('view-app')) {
                 App.UI.launch();
             }
-            window.App = App;
         }
     };
 
-    // Boot
+    // Boot Immediately
     window.addEventListener('DOMContentLoaded', App.init);
 </script>
 </body>
